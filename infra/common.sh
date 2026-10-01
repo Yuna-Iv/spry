@@ -14,6 +14,9 @@ AUTH_STACK="$PROJECT_NAME-auth"
 # CloudFront only accepts certificates from us-east-1.
 CERT_STACK="$PROJECT_NAME-certificate"
 CERT_REGION="us-east-1"
+# The API on its own domain (make add-api-domain): a CloudFront distribution and its certificate.
+API_STACK="$PROJECT_NAME-api"
+API_CERT_STACK="$PROJECT_NAME-api-certificate"
 
 # Every resource is tagged PROJECT_NAME=<PROJECT_NAME>: explicitly in the templates, via the
 # stack tags (which also cover resources CloudFormation creates implicitly), and by the

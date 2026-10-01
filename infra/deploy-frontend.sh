@@ -12,6 +12,10 @@ main() {
   stack_exists "$BACKEND_STACK" || { echo "Stack $BACKEND_STACK not found; run make deploy-backend first." >&2; exit 1; }
   require_auth_stack
   api_base_url="$(output "$BACKEND_STACK" ApiBaseUrl)"
+  # With `make add-api-domain` done, the frontend calls the API on its own domain.
+  if [ -n "${API_DOMAIN_NAME:-}" ] && stack_exists "$API_STACK" "$CERT_REGION"; then
+    api_base_url="https://$API_DOMAIN_NAME"
+  fi
 
   echo "==> [1/6] Build the frontend (API: $api_base_url)"
   (cd frontend && npm ci && \
