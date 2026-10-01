@@ -1,0 +1,87 @@
+# CI/CD: on every push to main — lint, test, then deploy to AWS with `make deploy`
+# (the same command you run locally). AWS credentials come from OIDC, not stored keys.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # lets the job ask GitHub for an OIDC token
+
+# Never run two deployments at the same time; a newer push waits for the older one.
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  PROJECT_NAME: ${{ vars.PROJECT_NAME }}
+  DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
+  API_DOMAIN_NAME: ${{ vars.API_DOMAIN_NAME }}
+  HOSTED_ZONE_ID: ${{ vars.HOSTED_ZONE_ID }}
+
+jobs:
+  lint:
+    uses: ./.github/workflows/lint.yml
+
+  test:
+    name: Backend tests
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: meetings
+          POSTGRES_PASSWORD: meetings
+          POSTGRES_DB: meetings
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U meetings -d meetings"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+asyncpg://meetings:meetings@localhost:5432/meetings
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Pytest
+        run: uv run pytest -v
+
+  deploy:
+    name: Deploy to AWS
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+
+      # The Lambda image is built for arm64; QEMU lets the x86 runner build it.
+      - uses: docker/setup-qemu-action@v3
+
+      - name: AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: make deploy
+        run: make deploy

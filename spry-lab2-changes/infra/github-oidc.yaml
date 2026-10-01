@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  Lets GitHub Actions deploy the app without stored access keys: GitHub's OIDC provider and
+  a role that only workflow runs on the main branch of one repository can assume.
+  Deploy once by hand (see README), then put the RoleArn output into the repository
+  variable AWS_ROLE_ARN.
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Description: owner/repository, e.g. my-user/spry
+    AllowedPattern: "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+  CreateProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Set to false if the account already has the token.actions.githubusercontent.com provider
+
+Conditions:
+  ShouldCreateProvider: !Equals [!Ref CreateProvider, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Description: Assumed by GitHub Actions (main branch only) to run make deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                # The token must be meant for AWS STS ...
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # ... and come from this repository, from a push to main. Nothing else.
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepo}:ref:refs/heads/main"
+      # The deploy creates CloudFormation stacks with Lambda, VPC, RDS, ECR, IAM roles, S3,
+      # CloudFront, ACM, Cognito and SSM resources, so the role needs broad rights. Who may
+      # use it is limited by the trust policy above.
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AdministratorAccess
+
+Outputs:
+  RoleArn:
+    Value: !GetAtt DeployRole.Arn
