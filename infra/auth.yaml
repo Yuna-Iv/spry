@@ -35,6 +35,11 @@ Resources:
     UpdateReplacePolicy: Retain
     Properties:
       UserPoolName: !Sub ${ProjectName}-users
+      # Managed login (the hosted sign-in page) needs the Essentials tier; first 10,000 MAU are free.
+      UserPoolTier: ESSENTIALS
+      # Self sign-up stays on: anyone can create an account on the sign-in page.
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
       # Users sign in with their email; Cognito emails a code to verify it.
       UsernameAttributes: [email]
       AutoVerifiedAttributes: [email]
@@ -81,6 +86,8 @@ Resources:
     Properties:
       UserPoolId: !Ref UserPool
       Domain: !Sub ${ProjectName}-${AWS::AccountId}
+      # Version 2 = the new managed login page (needs the branding below to show anything).
+      ManagedLoginVersion: 2
 
   GoogleIdentityProvider:
     Type: AWS::Cognito::UserPoolIdentityProvider
@@ -131,6 +138,15 @@ Resources:
         - ","
         - !Join ["", [!Join ["/login,", !Ref AppUrls], "/login"]]
 
+  # Default Cognito look for the managed login page of this app client.
+  ManagedLoginBranding:
+    Type: AWS::Cognito::ManagedLoginBranding
+    DependsOn: UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      ClientId: !Ref UserPoolClient
+      UseCognitoProvidedValues: true
+
 Outputs:
   Region:
     Value: !Ref AWS::Region
@@ -139,10 +155,13 @@ Outputs:
   UserPoolClientId:
     Value: !Ref UserPoolClient
   Domain:
-    Description: Cognito domain for OAuth redirects (Google)
+    Description: Cognito domain for the managed login page and OAuth redirects
     Value: !Sub ${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com
   Issuer:
     Description: Issuer of the tokens; the backend checks it
     Value: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
   GoogleEnabled:
     Value: !If [HasGoogle, "true", "false"]
+  LoginPageUrl:
+    Description: Cognito's managed login page (open it through the app's /login, not directly)
+    Value: !Sub https://${UserPoolDomain}.auth.${AWS::Region}.amazoncognito.com/login

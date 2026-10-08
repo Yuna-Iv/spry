@@ -163,6 +163,8 @@ export const authApi = {
     withFriendlyErrors(() => resendSignUpCode({ username: email }).then(() => undefined)),
   /** Leaves the page for Google; the user comes back signed in on /login. */
   loginWithGoogle: () => withFriendlyErrors(() => signInWithRedirect({ provider: 'Google' })),
+  /** Leaves the page for Cognito's managed login (email + password, or Continue with Google). */
+  loginWithCognito: () => withFriendlyErrors(() => signInWithRedirect()),
 
   // Profile changes (password accounts only: Google sets the name and email on every sign-in).
   updateName: (name: string) =>

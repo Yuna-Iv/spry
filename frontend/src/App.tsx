@@ -5,7 +5,6 @@ import { useAuth } from '@/lib/auth'
 import { HomePage } from '@/pages/home-page'
 import { LoginPage } from '@/pages/login-page'
 import { ProfilePage } from '@/pages/profile-page'
-import { SignupPage } from '@/pages/signup-page'
 
 /** Sends signed-out visitors to the login page, remembering where they were going. */
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -53,14 +52,8 @@ export default function App() {
           </GuestOnly>
         }
       />
-      <Route
-        path="/signup"
-        element={
-          <GuestOnly>
-            <SignupPage />
-          </GuestOnly>
-        }
-      />
+      {/* Sign-up happens on Cognito's managed login page, reached through /login. */}
+      <Route path="/signup" element={<Navigate to="/login" replace />} />
       <Route path="*" element={<Navigate to="/home" replace />} />
     </Routes>
   )
