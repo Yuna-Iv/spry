@@ -9,7 +9,7 @@ Parameters:
   GitHubRepo:
     Type: String
     Description: owner/repository, e.g. my-user/spry
-    AllowedPattern: "[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+    AllowedPattern: "[A-Za-z0-9_.@-]+/[A-Za-z0-9_.@-]+"
   CreateProvider:
     Type: String
     Default: "true"

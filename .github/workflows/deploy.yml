@@ -77,11 +77,6 @@ jobs:
       # The Lambda image is built for arm64; QEMU lets the x86 runner build it.
       - uses: docker/setup-qemu-action@v3
 
-      - name: Debug OIDC (what GitHub sends to AWS)
-        run: |
-          curl -sSf -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=sts.amazonaws.com" | python3 -c "import sys,json,base64; t=json.load(sys.stdin)['value'].split('.')[1]; t+='='*(-len(t)%4); c=json.loads(base64.urlsafe_b64decode(t)); print('sub :', c['sub']); print('aud :', c['aud'])"
-          echo "role: [${{ vars.AWS_ROLE_ARN }}]"
-
       - name: AWS credentials via OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
