@@ -11,6 +11,7 @@ ECR_STACK="$PROJECT_NAME-ecr"
 BACKEND_STACK="$PROJECT_NAME-backend"
 FRONTEND_STACK="$PROJECT_NAME-frontend"
 AUTH_STACK="$PROJECT_NAME-auth"
+REPORTS_STACK="$PROJECT_NAME-reports"
 # CloudFront only accepts certificates from us-east-1.
 CERT_STACK="$PROJECT_NAME-certificate"
 CERT_REGION="us-east-1"
