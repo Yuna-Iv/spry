@@ -7,8 +7,8 @@ from sqlalchemy.orm import selectinload
 
 from app.auth import CurrentUser
 from app.db import SessionDep
-from app.models import Meeting, Participant, User
-from app.schemas import MeetingCreate, MeetingRead
+from app.models import Agenda, Meeting, Participant, User
+from app.schemas import AgendaRead, AgendaSave, MeetingCreate, MeetingRead
 
 router = APIRouter(prefix="/meetings", tags=["meetings"])
 
@@ -98,3 +98,41 @@ async def delete_meeting(meeting_id: uuid.UUID, session: SessionDep, user: Curre
     await session.delete(meeting)
     await session.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# --- Agenda: one per meeting. GET returns an empty agenda when none is saved yet; PUT replaces it.
+
+
+def _agenda_read(agenda: Agenda | None) -> AgendaRead:
+    if agenda is None:
+        return AgendaRead(items=[], action_items=[])
+    return AgendaRead(
+        items=agenda.items,
+        action_items=agenda.action_items,
+        from_ai=agenda.ai_suggestion is not None,
+        updated_at=agenda.updated_at,
+    )
+
+
+@router.get("/{meeting_id}/agenda", response_model=AgendaRead)
+async def get_agenda(meeting_id: uuid.UUID, session: SessionDep, user: CurrentUser) -> AgendaRead:
+    await _get_meeting(session, meeting_id, user)  # 404 for someone else's meeting
+    return _agenda_read(await session.get(Agenda, meeting_id))
+
+
+@router.put("/{meeting_id}/agenda", response_model=AgendaRead)
+async def save_agenda(
+    meeting_id: uuid.UUID, payload: AgendaSave, session: SessionDep, user: CurrentUser
+) -> AgendaRead:
+    await _get_meeting(session, meeting_id, user)
+    agenda = await session.get(Agenda, meeting_id)
+    if agenda is None:
+        agenda = Agenda(meeting_id=meeting_id)
+        session.add(agenda)
+    agenda.items = [item.model_dump(mode="json") for item in payload.items]
+    agenda.action_items = [item.model_dump(mode="json") for item in payload.action_items]
+    # A hand-typed save after a parsed one clears the suggestion: it no longer describes it.
+    agenda.ai_suggestion = payload.ai_suggestion.model_dump() if payload.ai_suggestion else None
+    await session.commit()
+    await session.refresh(agenda)
+    return _agenda_read(agenda)

@@ -1,0 +1,880 @@
+diff --git a/pb/backend/alembic/versions/20261027_0003_agendas.py b/backend/alembic/versions/20261027_0003_agendas.py
+new file mode 100644
+index 0000000..5f1937e
+--- /dev/null
++++ b/backend/alembic/versions/20261027_0003_agendas.py
+@@ -0,0 +1,47 @@
++"""agendas: one agenda per meeting, with the AI suggestion it came from
++
++Revision ID: 0003
++Revises: 0002
++Create Date: 2026-10-27
++"""
++
++from collections.abc import Sequence
++
++import sqlalchemy as sa
++from sqlalchemy.dialects import postgresql
++
++from alembic import op
++
++revision: str = "0003"
++down_revision: str | None = "0002"
++branch_labels: str | Sequence[str] | None = None
++depends_on: str | Sequence[str] | None = None
++
++
++def upgrade() -> None:
++    op.create_table(
++        "agendas",
++        sa.Column(
++            "meeting_id",
++            sa.Uuid(),
++            sa.ForeignKey("meetings.id", ondelete="CASCADE"),
++            primary_key=True,
++        ),
++        sa.Column(
++            "items", postgresql.JSONB(), nullable=False, server_default=sa.text("'[]'::jsonb")
++        ),
++        sa.Column(
++            "action_items",
++            postgresql.JSONB(),
++            nullable=False,
++            server_default=sa.text("'[]'::jsonb"),
++        ),
++        sa.Column("ai_suggestion", postgresql.JSONB(), nullable=True),
++        sa.Column(
++            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
++        ),
++    )
++
++
++def downgrade() -> None:
++    op.drop_table("agendas")
+diff --git a/backend/app/models.py b/backend/app/models.py
+index 635f771..65a8222 100644
+--- a/backend/app/models.py
++++ b/backend/app/models.py
+@@ -12,6 +12,7 @@ from sqlalchemy import (
+     Uuid,
+     func,
+ )
++from sqlalchemy.dialects.postgresql import JSONB
+ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+ 
+ 
+@@ -80,3 +81,24 @@ class Meeting(Base):
+         order_by=Participant.name,
+         passive_deletes=True,
+     )
++
++
++class Agenda(Base):
++    """A meeting's agenda: at most one per meeting, deleted with it.
++
++    `ai_suggestion` keeps what the agenda parser proposed (the parsed agenda, the model, the
++    prompt version and the pasted text) next to what the user saved. Null for agendas typed by
++    hand. The difference between the two is the parser's quality signal.
++    """
++
++    __tablename__ = "agendas"
++
++    meeting_id: Mapped[uuid.UUID] = mapped_column(
++        ForeignKey("meetings.id", ondelete="CASCADE"), primary_key=True
++    )
++    items: Mapped[list[dict]] = mapped_column(JSONB, default=list)
++    action_items: Mapped[list[dict]] = mapped_column(JSONB, default=list)
++    ai_suggestion: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
++    updated_at: Mapped[datetime] = mapped_column(
++        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
++    )
+diff --git a/backend/app/routers/meetings.py b/backend/app/routers/meetings.py
+index 4a747c7..60a82cf 100644
+--- a/backend/app/routers/meetings.py
++++ b/backend/app/routers/meetings.py
+@@ -7,8 +7,8 @@ from sqlalchemy.orm import selectinload
+ 
+ from app.auth import CurrentUser
+ from app.db import SessionDep
+-from app.models import Meeting, Participant, User
+-from app.schemas import MeetingCreate, MeetingRead
++from app.models import Agenda, Meeting, Participant, User
++from app.schemas import AgendaRead, AgendaSave, MeetingCreate, MeetingRead
+ 
+ router = APIRouter(prefix="/meetings", tags=["meetings"])
+ 
+@@ -98,3 +98,41 @@ async def delete_meeting(meeting_id: uuid.UUID, session: SessionDep, user: Curre
+     await session.delete(meeting)
+     await session.commit()
+     return Response(status_code=status.HTTP_204_NO_CONTENT)
++
++
++# --- Agenda: one per meeting. GET returns an empty agenda when none is saved yet; PUT replaces it.
++
++
++def _agenda_read(agenda: Agenda | None) -> AgendaRead:
++    if agenda is None:
++        return AgendaRead(items=[], action_items=[])
++    return AgendaRead(
++        items=agenda.items,
++        action_items=agenda.action_items,
++        from_ai=agenda.ai_suggestion is not None,
++        updated_at=agenda.updated_at,
++    )
++
++
++@router.get("/{meeting_id}/agenda", response_model=AgendaRead)
++async def get_agenda(meeting_id: uuid.UUID, session: SessionDep, user: CurrentUser) -> AgendaRead:
++    await _get_meeting(session, meeting_id, user)  # 404 for someone else's meeting
++    return _agenda_read(await session.get(Agenda, meeting_id))
++
++
++@router.put("/{meeting_id}/agenda", response_model=AgendaRead)
++async def save_agenda(
++    meeting_id: uuid.UUID, payload: AgendaSave, session: SessionDep, user: CurrentUser
++) -> AgendaRead:
++    await _get_meeting(session, meeting_id, user)
++    agenda = await session.get(Agenda, meeting_id)
++    if agenda is None:
++        agenda = Agenda(meeting_id=meeting_id)
++        session.add(agenda)
++    agenda.items = [item.model_dump(mode="json") for item in payload.items]
++    agenda.action_items = [item.model_dump(mode="json") for item in payload.action_items]
++    # A hand-typed save after a parsed one clears the suggestion: it no longer describes it.
++    agenda.ai_suggestion = payload.ai_suggestion.model_dump() if payload.ai_suggestion else None
++    await session.commit()
++    await session.refresh(agenda)
++    return _agenda_read(agenda)
+diff --git a/backend/app/schemas.py b/backend/app/schemas.py
+index 5512fe7..129c6d7 100644
+--- a/backend/app/schemas.py
++++ b/backend/app/schemas.py
+@@ -1,5 +1,5 @@
+ import uuid
+-from datetime import UTC, datetime
++from datetime import UTC, date, datetime
+ from typing import Annotated
+ 
+ from pydantic import (
+@@ -7,6 +7,7 @@ from pydantic import (
+     BaseModel,
+     ConfigDict,
+     EmailStr,
++    Field,
+     StringConstraints,
+     field_serializer,
+     model_validator,
+@@ -77,3 +78,46 @@ class MeetingRead(BaseModel):
+     @field_serializer("starts_at", "ends_at", "created_at")
+     def to_utc(self, value: datetime) -> str:
+         return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
++
++
++# --- Agenda -------------------------------------------------------------------------------
++# One contract for the hand-typed agenda and for the agenda parser (app/ai/agenda.py), which
++# reuses AgendaItem and ActionItem in the JSON schema it gives the model.
++
++OptionalName = Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)] | None
++
++
++class AgendaItem(BaseModel):
++    topic: Annotated[NonEmptyStr, StringConstraints(max_length=300)]
++    owner: OptionalName = None  # a name or an email, exactly as written
++    minutes: int | None = Field(default=None, ge=1, le=480)
++
++
++class ActionItem(BaseModel):
++    task: Annotated[NonEmptyStr, StringConstraints(max_length=300)]
++    owner: OptionalName = None
++    due: date | None = None
++
++
++class AiSuggestion(BaseModel):
++    """What the parser proposed, stored as-is next to the saved agenda."""
++
++    agenda: dict
++    model: Annotated[str, StringConstraints(max_length=100)]
++    prompt_version: Annotated[str, StringConstraints(max_length=50)]
++    source_text: Annotated[str, StringConstraints(max_length=10_000)]
++
++
++class AgendaSave(BaseModel):
++    items: list[AgendaItem] = Field(max_length=50)
++    action_items: list[ActionItem] = Field(default=[], max_length=50)
++    ai_suggestion: AiSuggestion | None = None
++
++
++class AgendaRead(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    items: list[AgendaItem]
++    action_items: list[ActionItem]
++    from_ai: bool = False
++    updated_at: datetime | None = None
+diff --git a/backend/tests/test_api.py b/backend/tests/test_api.py
+index e9a726f..dd9adac 100644
+--- a/backend/tests/test_api.py
++++ b/backend/tests/test_api.py
+@@ -2,6 +2,8 @@ import uuid
+ 
+ from httpx import AsyncClient
+ 
++from tests.conftest import make_token
++
+ 
+ async def make_participant(client: AsyncClient, name: str, email: str) -> dict:
+     response = await client.post("/api/participants", json={"name": name, "email": email})
+@@ -173,3 +175,120 @@ async def test_duplicate_participant_email(client: AsyncClient) -> None:
+ async def test_invalid_participant_email(client: AsyncClient) -> None:
+     response = await client.post("/api/participants", json={"name": "X", "email": "not-an-email"})
+     assert response.status_code == 422
++
++
++# --- Agenda --------------------------------------------------------------------------------
++
++
++async def make_meeting(client: AsyncClient, **overrides) -> dict:
++    response = await client.post("/api/meetings", json=meeting_payload(**overrides))
++    assert response.status_code == 201, response.text
++    return response.json()
++
++
++def agenda_payload(**overrides) -> dict:
++    payload = {
++        "items": [
++            {"topic": "Нові тарифи Pro", "owner": "Олена", "minutes": 15},
++            {"topic": "Фідбек від клієнтів", "owner": "Taras", "minutes": None},
++        ],
++        "action_items": [
++            {"task": "Порівняння з конкурентами", "owner": "Taras", "due": "2026-10-30"}
++        ],
++    }
++    payload.update(overrides)
++    return payload
++
++
++async def test_agenda_is_empty_until_saved(client: AsyncClient) -> None:
++    meeting = await make_meeting(client)
++
++    response = await client.get(f"/api/meetings/{meeting['id']}/agenda")
++
++    assert response.status_code == 200, response.text
++    assert response.json() == {
++        "items": [],
++        "action_items": [],
++        "from_ai": False,
++        "updated_at": None,
++    }
++
++
++async def test_save_and_read_agenda(client: AsyncClient) -> None:
++    meeting = await make_meeting(client)
++    url = f"/api/meetings/{meeting['id']}/agenda"
++
++    saved = await client.put(url, json=agenda_payload())
++    assert saved.status_code == 200, saved.text
++
++    body = (await client.get(url)).json()
++    assert [i["topic"] for i in body["items"]] == ["Нові тарифи Pro", "Фідбек від клієнтів"]
++    assert body["items"][0] == {"topic": "Нові тарифи Pro", "owner": "Олена", "minutes": 15}
++    assert body["action_items"][0]["due"] == "2026-10-30"
++    assert body["from_ai"] is False
++    assert body["updated_at"] is not None
++
++
++async def test_save_agenda_replaces_previous(client: AsyncClient) -> None:
++    meeting = await make_meeting(client)
++    url = f"/api/meetings/{meeting['id']}/agenda"
++    await client.put(url, json=agenda_payload())
++
++    await client.put(url, json={"items": [{"topic": "Only this"}]})
++
++    body = (await client.get(url)).json()
++    assert body["items"] == [{"topic": "Only this", "owner": None, "minutes": None}]
++    assert body["action_items"] == []
++
++
++async def test_save_agenda_keeps_ai_suggestion(client: AsyncClient, engine) -> None:
++    meeting = await make_meeting(client)
++    suggestion = {
++        "agenda": {"items": [{"topic": "Нові тарифи"}], "language": "uk"},
++        "model": "anthropic.claude-opus-5-5",
++        "prompt_version": "agenda-v1",
++        "source_text": "Пн 10:00, синк по прайсингу",
++    }
++
++    response = await client.put(
++        f"/api/meetings/{meeting['id']}/agenda", json=agenda_payload(ai_suggestion=suggestion)
++    )
++
++    assert response.status_code == 200, response.text
++    assert response.json()["from_ai"] is True
++    async with engine.connect() as conn:
++        stored = (await conn.exec_driver_sql("SELECT ai_suggestion FROM agendas")).scalar_one()
++    assert stored == suggestion
++
++
++async def test_agenda_validation(client: AsyncClient) -> None:
++    meeting = await make_meeting(client)
++    url = f"/api/meetings/{meeting['id']}/agenda"
++
++    for bad in (
++        {"items": [{"topic": "   "}]},
++        {"items": [{"topic": "A", "minutes": 0}]},
++        {"items": [{"topic": "A", "minutes": 481}]},
++        {"items": [], "action_items": [{"task": "B", "due": "next friday"}]},
++    ):
++        response = await client.put(url, json=bad)
++        assert response.status_code == 422, bad
++
++
++async def test_agenda_of_someone_elses_meeting_is_not_found(client: AsyncClient) -> None:
++    meeting = await make_meeting(client)
++    url = f"/api/meetings/{meeting['id']}/agenda"
++    bob = {"Authorization": f"Bearer {make_token('bob')}"}
++
++    assert (await client.get(url, headers=bob)).status_code == 404
++    assert (await client.put(url, json=agenda_payload(), headers=bob)).status_code == 404
++
++
++async def test_agenda_is_deleted_with_meeting(client: AsyncClient) -> None:
++    meeting = await make_meeting(client)
++    await client.put(f"/api/meetings/{meeting['id']}/agenda", json=agenda_payload())
++
++    await client.delete(f"/api/meetings/{meeting['id']}")
++
++    response = await client.get(f"/api/meetings/{meeting['id']}/agenda")
++    assert response.status_code == 404
+diff --git a/pb/frontend/src/components/agenda-form.tsx b/frontend/src/components/agenda-form.tsx
+new file mode 100644
+index 0000000..14b596d
+--- /dev/null
++++ b/frontend/src/components/agenda-form.tsx
+@@ -0,0 +1,244 @@
++import { zodResolver } from '@hookform/resolvers/zod'
++import { PlusIcon, XIcon } from 'lucide-react'
++import { Controller, useFieldArray, useForm, type FieldPath } from 'react-hook-form'
++import { toast } from 'sonner'
++import { Badge } from '@/components/ui/badge'
++import { Button } from '@/components/ui/button'
++import { FieldError } from '@/components/ui/field'
++import { Input } from '@/components/ui/input'
++import { useSaveAgenda } from '@/hooks/queries'
++import {
++  agendaSchema,
++  emptyActionItem,
++  emptyItem,
++  toPayload,
++  type AgendaFormValues,
++} from '@/lib/agenda'
++import type { AiSuggestion } from '@/lib/api'
++import { cn } from '@/lib/utils'
++
++type Props = {
++  meetingId: string
++  initialValues: AgendaFormValues
++  /**
++   * Set when the values came from the agenda parser: every filled field the user has not
++   * touched yet is marked "suggested", and the suggestion is saved next to the agenda.
++   */
++  suggestion?: AiSuggestion | null
++  onCancel: () => void
++  onSaved: () => void
++}
++
++export function AgendaForm({ meetingId, initialValues, suggestion, onCancel, onSaved }: Props) {
++  const saveAgenda = useSaveAgenda()
++  const form = useForm<AgendaFormValues>({
++    resolver: zodResolver(agendaSchema),
++    defaultValues: initialValues,
++  })
++  const items = useFieldArray({ control: form.control, name: 'items' })
++  const actionItems = useFieldArray({ control: form.control, name: 'actionItems' })
++
++  /** A field the model filled in and the user has not changed yet. */
++  const isSuggested = (name: FieldPath<AgendaFormValues>) =>
++    Boolean(suggestion) &&
++    !form.getFieldState(name, form.formState).isDirty &&
++    String(form.getValues(name) ?? '') !== ''
++
++  const onSubmit = form.handleSubmit((values) => {
++    saveAgenda.mutate(
++      { meetingId, ...toPayload(values), ai_suggestion: suggestion ?? null },
++      {
++        onSuccess: () => {
++          toast.success('Agenda saved')
++          onSaved()
++        },
++        onError: (error) => form.setError('root', { message: error.message }),
++      },
++    )
++  })
++
++  return (
++    <form onSubmit={onSubmit} noValidate className="flex flex-col gap-5">
++      <fieldset className="flex flex-col gap-3">
++        <legend className="mb-2 text-sm font-semibold">Topics</legend>
++        {items.fields.length === 0 && (
++          <p className="text-sm text-muted-foreground">No topics yet.</p>
++        )}
++        {items.fields.map((row, index) => (
++          <div key={row.id} className="flex flex-col gap-2 rounded-lg border p-3">
++            <Controller
++              name={`items.${index}.topic`}
++              control={form.control}
++              render={({ field, fieldState }) => (
++                <div>
++                  <SuggestedInput
++                    suggested={isSuggested(field.name)}
++                    placeholder="Topic"
++                    aria-label={`Topic ${index + 1}`}
++                    aria-invalid={fieldState.invalid}
++                    {...field}
++                  />
++                  <FieldError errors={[fieldState.error]} />
++                </div>
++              )}
++            />
++            <div className="grid grid-cols-[1fr_7rem_auto] items-start gap-2">
++              <Controller
++                name={`items.${index}.owner`}
++                control={form.control}
++                render={({ field }) => (
++                  <SuggestedInput
++                    suggested={isSuggested(field.name)}
++                    placeholder="Owner (optional)"
++                    aria-label={`Owner of topic ${index + 1}`}
++                    {...field}
++                  />
++                )}
++              />
++              <Controller
++                name={`items.${index}.minutes`}
++                control={form.control}
++                render={({ field, fieldState }) => (
++                  <div>
++                    <SuggestedInput
++                      suggested={isSuggested(field.name)}
++                      inputMode="numeric"
++                      placeholder="Min"
++                      aria-label={`Minutes for topic ${index + 1}`}
++                      aria-invalid={fieldState.invalid}
++                      {...field}
++                    />
++                    <FieldError errors={[fieldState.error]} />
++                  </div>
++                )}
++              />
++              <Button
++                type="button"
++                variant="ghost"
++                size="icon"
++                aria-label={`Remove topic ${index + 1}`}
++                onClick={() => items.remove(index)}
++              >
++                <XIcon />
++              </Button>
++            </div>
++          </div>
++        ))}
++        <Button
++          type="button"
++          variant="outline"
++          size="sm"
++          className="self-start"
++          onClick={() => items.append(emptyItem)}
++        >
++          <PlusIcon />
++          Add topic
++        </Button>
++      </fieldset>
++
++      <fieldset className="flex flex-col gap-3">
++        <legend className="mb-2 text-sm font-semibold">Action items</legend>
++        {actionItems.fields.map((row, index) => (
++          <div key={row.id} className="flex flex-col gap-2 rounded-lg border p-3">
++            <Controller
++              name={`actionItems.${index}.task`}
++              control={form.control}
++              render={({ field, fieldState }) => (
++                <div>
++                  <SuggestedInput
++                    suggested={isSuggested(field.name)}
++                    placeholder="Task"
++                    aria-label={`Action item ${index + 1}`}
++                    aria-invalid={fieldState.invalid}
++                    {...field}
++                  />
++                  <FieldError errors={[fieldState.error]} />
++                </div>
++              )}
++            />
++            <div className="grid grid-cols-[1fr_10rem_auto] items-start gap-2">
++              <Controller
++                name={`actionItems.${index}.owner`}
++                control={form.control}
++                render={({ field }) => (
++                  <SuggestedInput
++                    suggested={isSuggested(field.name)}
++                    placeholder="Owner (optional)"
++                    aria-label={`Owner of action item ${index + 1}`}
++                    {...field}
++                  />
++                )}
++              />
++              <Controller
++                name={`actionItems.${index}.due`}
++                control={form.control}
++                render={({ field }) => (
++                  <SuggestedInput
++                    suggested={isSuggested(field.name)}
++                    type="date"
++                    aria-label={`Due date of action item ${index + 1}`}
++                    {...field}
++                  />
++                )}
++              />
++              <Button
++                type="button"
++                variant="ghost"
++                size="icon"
++                aria-label={`Remove action item ${index + 1}`}
++                onClick={() => actionItems.remove(index)}
++              >
++                <XIcon />
++              </Button>
++            </div>
++          </div>
++        ))}
++        <Button
++          type="button"
++          variant="outline"
++          size="sm"
++          className="self-start"
++          onClick={() => actionItems.append(emptyActionItem)}
++        >
++          <PlusIcon />
++          Add action item
++        </Button>
++      </fieldset>
++
++      {form.formState.errors.root && <FieldError>{form.formState.errors.root.message}</FieldError>}
++
++      <div className="flex justify-end gap-2">
++        <Button type="button" variant="outline" onClick={onCancel}>
++          Cancel
++        </Button>
++        <Button type="submit" disabled={saveAgenda.isPending}>
++          {saveAgenda.isPending ? 'Saving...' : 'Save agenda'}
++        </Button>
++      </div>
++    </form>
++  )
++}
++
++/**
++ * An input marked "suggested" (a tinted background and a small badge on its top border, so it
++ * never covers the value) while its value is still the model's.
++ */
++function SuggestedInput({
++  suggested,
++  className,
++  ...props
++}: React.ComponentProps<typeof Input> & { suggested: boolean }) {
++  return (
++    <div className="relative">
++      <Input className={cn(suggested && 'bg-secondary/40', className)} {...props} />
++      {suggested && (
++        <Badge
++          variant="outline"
++          className="pointer-events-none absolute -top-2 right-4 h-4 bg-background px-1.5 text-[10px]"
++        >
++          suggested
++        </Badge>
++      )}
++    </div>
++  )
++}
+diff --git a/pb/frontend/src/components/agenda-section.tsx b/frontend/src/components/agenda-section.tsx
+new file mode 100644
+index 0000000..f256567
+--- /dev/null
++++ b/frontend/src/components/agenda-section.tsx
+@@ -0,0 +1,92 @@
++import { useState } from 'react'
++import { format, parseISO } from 'date-fns'
++import { ListChecksIcon, PencilIcon, PlusIcon } from 'lucide-react'
++
++import { AgendaForm } from '@/components/agenda-form'
++import { Button } from '@/components/ui/button'
++import { Skeleton } from '@/components/ui/skeleton'
++import { useAgenda } from '@/hooks/queries'
++import { emptyAgendaValues, toAgendaFormValues } from '@/lib/agenda'
++import type { Agenda } from '@/lib/api'
++
++/** The agenda block of the meeting details: shows the saved agenda, or the form to edit it. */
++export function AgendaSection({ meetingId }: { meetingId: string }) {
++  const agenda = useAgenda(meetingId)
++  const [editing, setEditing] = useState(false)
++  const isEmpty = !agenda.data || agenda.data.items.length + agenda.data.action_items.length === 0
++
++  return (
++    <div className="flex flex-col gap-3">
++      <div className="flex items-center justify-between gap-2">
++        <h3 className="flex items-center gap-2 text-lg">
++          <ListChecksIcon className="size-4" />
++          Agenda
++        </h3>
++        {!editing && agenda.isSuccess && (
++          <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
++            {isEmpty ? <PlusIcon /> : <PencilIcon />}
++            {isEmpty ? 'Add agenda' : 'Edit agenda'}
++          </Button>
++        )}
++      </div>
++
++      {agenda.isPending && <Skeleton className="h-16 w-full" />}
++      {agenda.isError && (
++        <p className="text-sm text-destructive">
++          Could not load the agenda: {agenda.error.message}
++        </p>
++      )}
++
++      {agenda.isSuccess &&
++        (editing ? (
++          <AgendaForm
++            meetingId={meetingId}
++            initialValues={isEmpty ? emptyAgendaValues : toAgendaFormValues(agenda.data)}
++            onCancel={() => setEditing(false)}
++            onSaved={() => setEditing(false)}
++          />
++        ) : isEmpty ? (
++          <p className="text-muted-foreground">No agenda yet.</p>
++        ) : (
++          <AgendaView agenda={agenda.data} />
++        ))}
++    </div>
++  )
++}
++
++function AgendaView({ agenda }: { agenda: Agenda }) {
++  return (
++    <div className="flex flex-col gap-4">
++      {agenda.items.length > 0 && (
++        <ol className="flex list-decimal flex-col gap-1.5 pl-5">
++          {agenda.items.map((item, index) => (
++            <li key={index}>
++              <span>{item.topic}</span>
++              <Meta parts={[item.owner, item.minutes && `${item.minutes} min`]} />
++            </li>
++          ))}
++        </ol>
++      )}
++      {agenda.action_items.length > 0 && (
++        <div className="flex flex-col gap-1.5">
++          <h4 className="text-sm font-semibold">Action items</h4>
++          <ul className="flex list-disc flex-col gap-1.5 pl-5">
++            {agenda.action_items.map((item, index) => (
++              <li key={index}>
++                <span>{item.task}</span>
++                <Meta
++                  parts={[item.owner, item.due && `by ${format(parseISO(item.due), 'EEE, d MMM')}`]}
++                />
++              </li>
++            ))}
++          </ul>
++        </div>
++      )}
++    </div>
++  )
++}
++
++function Meta({ parts }: { parts: (string | number | null | undefined | false)[] }) {
++  const text = parts.filter(Boolean).join(' · ')
++  return text ? <span className="text-sm text-muted-foreground"> — {text}</span> : null
++}
+diff --git a/frontend/src/components/meeting-details-dialog.tsx b/frontend/src/components/meeting-details-dialog.tsx
+index f90c52d..bfc4281 100644
+--- a/frontend/src/components/meeting-details-dialog.tsx
++++ b/frontend/src/components/meeting-details-dialog.tsx
+@@ -1,6 +1,7 @@
+ import { useRef } from 'react'
+ import { ClockIcon, MapPinIcon, PencilIcon, Trash2Icon, UsersIcon } from 'lucide-react'
+ 
++import { AgendaSection } from '@/components/agenda-section'
+ import { Button } from '@/components/ui/button'
+ import {
+   Dialog,
+@@ -74,6 +75,10 @@ export function MeetingDetailsDialog({ meeting, open, onOpenChange, onEdit, onDe
+                 </>
+               )}
+ 
++              <div className="hairline" />
++              {/* key: a fresh section (not left in edit mode) for every meeting opened. */}
++              <AgendaSection key={meeting.id} meetingId={meeting.id} />
++
+               <div className="hairline" />
+               <div className="flex flex-col gap-3">
+                 <h3 className="flex items-center gap-2 text-lg">
+diff --git a/frontend/src/hooks/queries.ts b/frontend/src/hooks/queries.ts
+index 50c42af..aa4e016 100644
+--- a/frontend/src/hooks/queries.ts
++++ b/frontend/src/hooks/queries.ts
+@@ -4,6 +4,7 @@ import { api } from '@/lib/api'
+ 
+ export const meetingsKey = ['meetings'] as const
+ export const participantsKey = ['participants'] as const
++export const agendaKey = (meetingId: string) => ['agenda', meetingId] as const
+ 
+ export function useMeetings() {
+   return useQuery({ queryKey: meetingsKey, queryFn: api.listMeetings })
+@@ -44,3 +45,15 @@ export function useCreateParticipant() {
+     onSuccess: () => queryClient.invalidateQueries({ queryKey: participantsKey }),
+   })
+ }
++
++export function useAgenda(meetingId: string) {
++  return useQuery({ queryKey: agendaKey(meetingId), queryFn: () => api.getAgenda(meetingId) })
++}
++
++export function useSaveAgenda() {
++  const queryClient = useQueryClient()
++  return useMutation({
++    mutationFn: api.saveAgenda,
++    onSuccess: (agenda, { meetingId }) => queryClient.setQueryData(agendaKey(meetingId), agenda),
++  })
++}
+diff --git a/pb/frontend/src/lib/agenda.ts b/frontend/src/lib/agenda.ts
+new file mode 100644
+index 0000000..a7597bc
+--- /dev/null
++++ b/frontend/src/lib/agenda.ts
+@@ -0,0 +1,71 @@
++import { z } from 'zod'
++
++import type { ActionItem, AgendaItem } from '@/lib/api'
++
++// The form keeps every value as a string (what inputs hold); toPayload turns them into the API's
++// types, with '' meaning "not given" (null).
++export const agendaSchema = z.object({
++  items: z.array(
++    z.object({
++      topic: z.string().trim().min(1, 'Topic is required').max(300),
++      owner: z.string().max(255),
++      minutes: z
++        .string()
++        .regex(/^\d*$/, 'Whole minutes')
++        .refine((v) => v === '' || (Number(v) >= 1 && Number(v) <= 480), '1–480 minutes'),
++    }),
++  ),
++  actionItems: z.array(
++    z.object({
++      task: z.string().trim().min(1, 'Task is required').max(300),
++      owner: z.string().max(255),
++      due: z.string(),
++    }),
++  ),
++})
++
++export type AgendaFormValues = z.input<typeof agendaSchema>
++
++export const emptyAgendaValues: AgendaFormValues = { items: [], actionItems: [] }
++
++export const emptyItem = { topic: '', owner: '', minutes: '' }
++export const emptyActionItem = { task: '', owner: '', due: '' }
++
++/** Form values from an agenda: the saved one, or (later) the one the parser suggested. */
++export function toAgendaFormValues(agenda: {
++  items: AgendaItem[]
++  action_items: ActionItem[]
++}): AgendaFormValues {
++  return {
++    items: agenda.items.map((i) => ({
++      topic: i.topic,
++      owner: i.owner ?? '',
++      minutes: i.minutes == null ? '' : String(i.minutes),
++    })),
++    actionItems: agenda.action_items.map((a) => ({
++      task: a.task,
++      owner: a.owner ?? '',
++      due: a.due ?? '',
++    })),
++  }
++}
++
++const orNull = (value: string) => (value.trim() === '' ? null : value.trim())
++
++export function toPayload(values: AgendaFormValues): {
++  items: AgendaItem[]
++  action_items: ActionItem[]
++} {
++  return {
++    items: values.items.map((i) => ({
++      topic: i.topic.trim(),
++      owner: orNull(i.owner),
++      minutes: i.minutes === '' ? null : Number(i.minutes),
++    })),
++    action_items: values.actionItems.map((a) => ({
++      task: a.task.trim(),
++      owner: orNull(a.owner),
++      due: orNull(a.due),
++    })),
++  }
++}
+diff --git a/frontend/src/lib/api.ts b/frontend/src/lib/api.ts
+index ecde585..26e4483 100644
+--- a/frontend/src/lib/api.ts
++++ b/frontend/src/lib/api.ts
+@@ -33,6 +33,41 @@ export type ParticipantCreate = {
+   email: string
+ }
+ 
++export type AgendaItem = {
++  topic: string
++  owner: string | null
++  minutes: number | null
++}
++
++export type ActionItem = {
++  task: string
++  owner: string | null
++  /** YYYY-MM-DD */
++  due: string | null
++}
++
++export type Agenda = {
++  items: AgendaItem[]
++  action_items: ActionItem[]
++  /** Saved from a parsed (pasted) agenda rather than typed by hand. */
++  from_ai: boolean
++  updated_at: string | null
++}
++
++/** What the agenda parser proposed; stored next to the saved agenda as the quality signal. */
++export type AiSuggestion = {
++  agenda: unknown
++  model: string
++  prompt_version: string
++  source_text: string
++}
++
++export type AgendaSave = {
++  items: AgendaItem[]
++  action_items: ActionItem[]
++  ai_suggestion?: AiSuggestion | null
++}
++
+ export class ApiError extends Error {
+   readonly status: number
+ 
+@@ -101,4 +136,10 @@ export const api = {
+   listParticipants: () => request<Participant[]>('/participants'),
+   createParticipant: (data: ParticipantCreate) =>
+     request<Participant>('/participants', { method: 'POST', body: JSON.stringify(data) }),
++  getAgenda: (meetingId: string) => request<Agenda>(`/meetings/${meetingId}/agenda`),
++  saveAgenda: ({ meetingId, ...data }: AgendaSave & { meetingId: string }) =>
++    request<Agenda>(`/meetings/${meetingId}/agenda`, {
++      method: 'PUT',
++      body: JSON.stringify(data),
++    }),
+ }

@@ -33,6 +33,41 @@ export type ParticipantCreate = {
   email: string
 }
 
+export type AgendaItem = {
+  topic: string
+  owner: string | null
+  minutes: number | null
+}
+
+export type ActionItem = {
+  task: string
+  owner: string | null
+  /** YYYY-MM-DD */
+  due: string | null
+}
+
+export type Agenda = {
+  items: AgendaItem[]
+  action_items: ActionItem[]
+  /** Saved from a parsed (pasted) agenda rather than typed by hand. */
+  from_ai: boolean
+  updated_at: string | null
+}
+
+/** What the agenda parser proposed; stored next to the saved agenda as the quality signal. */
+export type AiSuggestion = {
+  agenda: unknown
+  model: string
+  prompt_version: string
+  source_text: string
+}
+
+export type AgendaSave = {
+  items: AgendaItem[]
+  action_items: ActionItem[]
+  ai_suggestion?: AiSuggestion | null
+}
+
 export class ApiError extends Error {
   readonly status: number
 
@@ -101,4 +136,10 @@ export const api = {
   listParticipants: () => request<Participant[]>('/participants'),
   createParticipant: (data: ParticipantCreate) =>
     request<Participant>('/participants', { method: 'POST', body: JSON.stringify(data) }),
+  getAgenda: (meetingId: string) => request<Agenda>(`/meetings/${meetingId}/agenda`),
+  saveAgenda: ({ meetingId, ...data }: AgendaSave & { meetingId: string }) =>
+    request<Agenda>(`/meetings/${meetingId}/agenda`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
 }

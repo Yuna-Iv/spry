@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Annotated
 
 from pydantic import (
@@ -7,6 +7,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     EmailStr,
+    Field,
     StringConstraints,
     field_serializer,
     model_validator,
@@ -77,3 +78,46 @@ class MeetingRead(BaseModel):
     @field_serializer("starts_at", "ends_at", "created_at")
     def to_utc(self, value: datetime) -> str:
         return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+# --- Agenda -------------------------------------------------------------------------------
+# One contract for the hand-typed agenda and for the agenda parser (app/ai/agenda.py), which
+# reuses AgendaItem and ActionItem in the JSON schema it gives the model.
+
+OptionalName = Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)] | None
+
+
+class AgendaItem(BaseModel):
+    topic: Annotated[NonEmptyStr, StringConstraints(max_length=300)]
+    owner: OptionalName = None  # a name or an email, exactly as written
+    minutes: int | None = Field(default=None, ge=1, le=480)
+
+
+class ActionItem(BaseModel):
+    task: Annotated[NonEmptyStr, StringConstraints(max_length=300)]
+    owner: OptionalName = None
+    due: date | None = None
+
+
+class AiSuggestion(BaseModel):
+    """What the parser proposed, stored as-is next to the saved agenda."""
+
+    agenda: dict
+    model: Annotated[str, StringConstraints(max_length=100)]
+    prompt_version: Annotated[str, StringConstraints(max_length=50)]
+    source_text: Annotated[str, StringConstraints(max_length=10_000)]
+
+
+class AgendaSave(BaseModel):
+    items: list[AgendaItem] = Field(max_length=50)
+    action_items: list[ActionItem] = Field(default=[], max_length=50)
+    ai_suggestion: AiSuggestion | None = None
+
+
+class AgendaRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    items: list[AgendaItem]
+    action_items: list[ActionItem]
+    from_ai: bool = False
+    updated_at: datetime | None = None

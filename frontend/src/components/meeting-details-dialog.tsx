@@ -1,6 +1,7 @@
 import { useRef } from 'react'
 import { ClockIcon, MapPinIcon, PencilIcon, Trash2Icon, UsersIcon } from 'lucide-react'
 
+import { AgendaSection } from '@/components/agenda-section'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -73,6 +74,10 @@ export function MeetingDetailsDialog({ meeting, open, onOpenChange, onEdit, onDe
                   </p>
                 </>
               )}
+
+              <div className="hairline" />
+              {/* key: a fresh section (not left in edit mode) for every meeting opened. */}
+              <AgendaSection key={meeting.id} meetingId={meeting.id} />
 
               <div className="hairline" />
               <div className="flex flex-col gap-3">

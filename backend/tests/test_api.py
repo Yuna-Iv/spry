@@ -2,6 +2,8 @@ import uuid
 
 from httpx import AsyncClient
 
+from tests.conftest import make_token
+
 
 async def make_participant(client: AsyncClient, name: str, email: str) -> dict:
     response = await client.post("/api/participants", json={"name": name, "email": email})
@@ -173,3 +175,120 @@ async def test_duplicate_participant_email(client: AsyncClient) -> None:
 async def test_invalid_participant_email(client: AsyncClient) -> None:
     response = await client.post("/api/participants", json={"name": "X", "email": "not-an-email"})
     assert response.status_code == 422
+
+
+# --- Agenda --------------------------------------------------------------------------------
+
+
+async def make_meeting(client: AsyncClient, **overrides) -> dict:
+    response = await client.post("/api/meetings", json=meeting_payload(**overrides))
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def agenda_payload(**overrides) -> dict:
+    payload = {
+        "items": [
+            {"topic": "Нові тарифи Pro", "owner": "Олена", "minutes": 15},
+            {"topic": "Фідбек від клієнтів", "owner": "Taras", "minutes": None},
+        ],
+        "action_items": [
+            {"task": "Порівняння з конкурентами", "owner": "Taras", "due": "2026-10-30"}
+        ],
+    }
+    payload.update(overrides)
+    return payload
+
+
+async def test_agenda_is_empty_until_saved(client: AsyncClient) -> None:
+    meeting = await make_meeting(client)
+
+    response = await client.get(f"/api/meetings/{meeting['id']}/agenda")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "items": [],
+        "action_items": [],
+        "from_ai": False,
+        "updated_at": None,
+    }
+
+
+async def test_save_and_read_agenda(client: AsyncClient) -> None:
+    meeting = await make_meeting(client)
+    url = f"/api/meetings/{meeting['id']}/agenda"
+
+    saved = await client.put(url, json=agenda_payload())
+    assert saved.status_code == 200, saved.text
+
+    body = (await client.get(url)).json()
+    assert [i["topic"] for i in body["items"]] == ["Нові тарифи Pro", "Фідбек від клієнтів"]
+    assert body["items"][0] == {"topic": "Нові тарифи Pro", "owner": "Олена", "minutes": 15}
+    assert body["action_items"][0]["due"] == "2026-10-30"
+    assert body["from_ai"] is False
+    assert body["updated_at"] is not None
+
+
+async def test_save_agenda_replaces_previous(client: AsyncClient) -> None:
+    meeting = await make_meeting(client)
+    url = f"/api/meetings/{meeting['id']}/agenda"
+    await client.put(url, json=agenda_payload())
+
+    await client.put(url, json={"items": [{"topic": "Only this"}]})
+
+    body = (await client.get(url)).json()
+    assert body["items"] == [{"topic": "Only this", "owner": None, "minutes": None}]
+    assert body["action_items"] == []
+
+
+async def test_save_agenda_keeps_ai_suggestion(client: AsyncClient, engine) -> None:
+    meeting = await make_meeting(client)
+    suggestion = {
+        "agenda": {"items": [{"topic": "Нові тарифи"}], "language": "uk"},
+        "model": "anthropic.claude-opus-5-5",
+        "prompt_version": "agenda-v1",
+        "source_text": "Пн 10:00, синк по прайсингу",
+    }
+
+    response = await client.put(
+        f"/api/meetings/{meeting['id']}/agenda", json=agenda_payload(ai_suggestion=suggestion)
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["from_ai"] is True
+    async with engine.connect() as conn:
+        stored = (await conn.exec_driver_sql("SELECT ai_suggestion FROM agendas")).scalar_one()
+    assert stored == suggestion
+
+
+async def test_agenda_validation(client: AsyncClient) -> None:
+    meeting = await make_meeting(client)
+    url = f"/api/meetings/{meeting['id']}/agenda"
+
+    for bad in (
+        {"items": [{"topic": "   "}]},
+        {"items": [{"topic": "A", "minutes": 0}]},
+        {"items": [{"topic": "A", "minutes": 481}]},
+        {"items": [], "action_items": [{"task": "B", "due": "next friday"}]},
+    ):
+        response = await client.put(url, json=bad)
+        assert response.status_code == 422, bad
+
+
+async def test_agenda_of_someone_elses_meeting_is_not_found(client: AsyncClient) -> None:
+    meeting = await make_meeting(client)
+    url = f"/api/meetings/{meeting['id']}/agenda"
+    bob = {"Authorization": f"Bearer {make_token('bob')}"}
+
+    assert (await client.get(url, headers=bob)).status_code == 404
+    assert (await client.put(url, json=agenda_payload(), headers=bob)).status_code == 404
+
+
+async def test_agenda_is_deleted_with_meeting(client: AsyncClient) -> None:
+    meeting = await make_meeting(client)
+    await client.put(f"/api/meetings/{meeting['id']}/agenda", json=agenda_payload())
+
+    await client.delete(f"/api/meetings/{meeting['id']}")
+
+    response = await client.get(f"/api/meetings/{meeting['id']}/agenda")
+    assert response.status_code == 404
