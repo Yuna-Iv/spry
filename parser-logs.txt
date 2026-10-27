@@ -1,0 +1,12 @@
+{"event": "agenda_parsed", "user": "63a448d2-1061-700d-a46c-0d456266dbc6", "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "prompt_version": "agenda-v1", "input_tokens": 1313, "output_tokens": 321, "latency_ms": 3607, "cost_usd": 0.002918}
+
+{"event": "agenda_parsed", "user": "63a448d2-1061-700d-a46c-0d456266dbc6", "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "prompt_version": "agenda-v1", "input_tokens": 1313, "output_tokens": 308, "latency_ms": 1761, "cost_usd": 0.002853}
+
+{"event": "agenda_parsed", "user": "63a448d2-1061-700d-a46c-0d456266dbc6", "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "prompt_version": "agenda-v1", "input_tokens": 1345, "output_tokens": 282, "latency_ms": 1701, "cost_usd": 0.002755}
+
+{"event": "agenda_parsed", "user": "63a448d2-1061-700d-a46c-0d456266dbc6", "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "prompt_version": "agenda-v1", "input_tokens": 1260, "output_tokens": 242, "latency_ms": 1610, "cost_usd": 0.00247}
+
+{"event": "agenda_parse_failed", "user": "63a448d2-1061-700d-a46c-0d456266dbc6", "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "prompt_version": "agenda-v1", "input_tokens": 1243, "output_tokens": 122, "latency_ms": 1487, "cost_usd": 0.001853, "error": "no agenda found in the text"}
+
+{"event": "agenda_parsed", "user": "63a448d2-1061-700d-a46c-0d456266dbc6", "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0", "prompt_version": "agenda-v1", "input_tokens": 1291, "output_tokens": 262, "latency_ms": 1516, "cost_usd": 0.002601}
+
