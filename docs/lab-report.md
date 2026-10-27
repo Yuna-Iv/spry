@@ -6,7 +6,7 @@ Spry · student: Yuliana Ivanchenko · 2026-10-27
 
 | # | Item | Where |
 |---|---|---|
-| 1 | Commit with the parser function, `infra/ai.yml`, the Paste an agenda screen and the ADR | **COMMIT_URL** |
+| 1 | Commit with the parser function, `infra/ai.yml`, the Paste an agenda screen and the ADR | **https://github.com/Yuna-Iv/spry/commit/2bf13541398cfa03d277f434fcf3851c69afc59f** |
 | 2 | Screen recording (≤ 45 s): paste → pre-filled form → correct one field → save | **agenda_parse_vid** (attached) |
 | 3 | Test table: five inputs, the JSON each produced, what was right or wrong | [below](#3-test-table) · full JSON in [agenda-parser-tests.md](agenda-parser-tests.md) |
 | 4 | One CloudWatch log line of a parse | [below](#4-cloudwatch-log-line) |
