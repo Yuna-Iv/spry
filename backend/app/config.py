@@ -1,11 +1,12 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    # The Makefile passes every setting, set or not: an empty one keeps its default.
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore", env_ignore_empty=True)
 
     database_url: str = "postgresql+asyncpg://meetings:meetings@localhost:5432/meetings"
     # Lambda serves one request per instance at a time, so it runs with a pool of 1.
@@ -21,6 +22,13 @@ class Settings(BaseSettings):
     # Bedrock may be in another region than the app: the parser reaches it over the internet.
     parser_model: str = "anthropic.claude-opus-5-5"
     bedrock_region: str = "us-east-1"
+    # Which Bedrock endpoint serves the model, both with the Anthropic Messages API:
+    # "mantle" (bedrock-mantle, current Claude models, IAM action bedrock-mantle:CreateInference)
+    # or "runtime" (bedrock-runtime InvokeModel, older Claude models such as Haiku 4.5, IAM
+    # action bedrock:InvokeModel; model ids there are inference profiles like us.anthropic....).
+    bedrock_api: Literal["mantle", "runtime"] = "mantle"
+    # How hard the model thinks (low ... max); "none": not sent, for models without it (Haiku 4.5).
+    parser_effort: str = "low"
     # Returns a fixed agenda after a short wait instead of calling the model: for building the
     # screen before Bedrock access is approved. Never set it on a deployment you record.
     parser_fake: bool = False

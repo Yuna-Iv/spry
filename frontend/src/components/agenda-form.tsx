@@ -1,4 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
+import { format, isValid, parseISO } from 'date-fns'
 import { PlusIcon, XIcon } from 'lucide-react'
 import { Controller, useFieldArray, useForm, type FieldPath } from 'react-hook-form'
 import { toast } from 'sonner'
@@ -173,12 +174,16 @@ export function AgendaForm({ meetingId, initialValues, suggestion, onCancel, onS
                 name={`actionItems.${index}.due`}
                 control={form.control}
                 render={({ field }) => (
-                  <SuggestedInput
-                    suggested={isSuggested(field.name)}
-                    type="date"
-                    aria-label={`Due date of action item ${index + 1}`}
-                    {...field}
-                  />
+                  <div>
+                    <SuggestedInput
+                      suggested={isSuggested(field.name)}
+                      type="date"
+                      aria-label={`Due date of action item ${index + 1}`}
+                      {...field}
+                    />
+                    {/* The weekday makes a wrong "by Friday" obvious at a glance. */}
+                    <Weekday value={field.value} />
+                  </div>
                 )}
               />
               <Button
@@ -241,4 +246,10 @@ function SuggestedInput({
       )}
     </div>
   )
+}
+
+function Weekday({ value }: { value: string }) {
+  const date = value ? parseISO(value) : null
+  if (!date || !isValid(date)) return null
+  return <p className="mt-1 pl-3 text-xs text-muted-foreground">{format(date, 'EEEE')}</p>
 }

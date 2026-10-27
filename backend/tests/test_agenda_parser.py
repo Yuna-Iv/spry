@@ -130,7 +130,27 @@ def test_cost() -> None:
     usage = {"input_tokens": 2000, "output_tokens": 500}
     assert cost_usd("anthropic.claude-opus-5-5", usage) == 0.018
     assert cost_usd("anthropic.claude-haiku-5-5", usage) == 0.00045
+    assert cost_usd("us.anthropic.claude-haiku-4-5-20251001-v1:0", usage) == 0.0045
     assert cost_usd("unknown-model", usage) is None
+
+
+def test_effort_is_optional(fake, monkeypatch) -> None:
+    client = fake(reply(GOOD))
+    monkeypatch.setattr(agenda_module.settings, "parser_effort", "none")
+
+    parse_agenda("text", TODAY, "Europe/Kyiv")
+
+    assert "output_config" not in client.calls[0]
+
+
+def test_client_follows_bedrock_api(monkeypatch) -> None:
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "a")
+    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "b")
+    for api, host in (("mantle", "bedrock-mantle"), ("runtime", "bedrock-runtime")):
+        monkeypatch.setattr(agenda_module.settings, "bedrock_api", api)
+        agenda_module.get_client.cache_clear()
+        assert host in str(agenda_module.get_client().base_url)
+    agenda_module.get_client.cache_clear()
 
 
 def test_tool_schema_is_the_parsed_agenda() -> None:

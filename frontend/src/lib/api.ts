@@ -1,4 +1,5 @@
 import { signOut } from 'aws-amplify/auth'
+import { format } from 'date-fns'
 
 import { getIdToken } from '@/lib/auth'
 
@@ -62,6 +63,23 @@ export type AiSuggestion = {
   source_text: string
 }
 
+/** What the agenda parser returns: a suggestion for the agenda form, never saved by itself. */
+export type ParsedAgenda = {
+  title: string | null
+  /** ISO 8601, with the user's offset if the model gave one. */
+  starts_at: string | null
+  duration_minutes: number | null
+  items: AgendaItem[]
+  action_items: ActionItem[]
+  language: string
+}
+
+export type ParseResult = {
+  agenda: ParsedAgenda
+  model: string
+  prompt_version: string
+}
+
 export type AgendaSave = {
   items: AgendaItem[]
   action_items: ActionItem[]
@@ -80,6 +98,10 @@ export class ApiError extends Error {
 // Backend origin, set at build time for AWS (the Lambda function URL). Empty locally,
 // where the Vite dev server or nginx proxies /api to the backend.
 const API_URL = (import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '')
+// The agenda parser's function URL (infra/ai.yml), set at build time. Empty locally, where the
+// Vite dev server proxies /parse to `make dev-parser`.
+const PARSER_URL = (import.meta.env.VITE_PARSER_URL ?? '').replace(/\/+$/, '')
+export const MAX_AGENDA_TEXT = 10_000
 
 type ValidationIssue = { loc?: (string | number)[]; msg: string }
 
@@ -142,4 +164,50 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(data),
     }),
+}
+
+/** Messages for the parser's errors; the user can always type the agenda by hand instead. */
+const PARSE_ERRORS: Record<number, string> = {
+  401: 'Your session has expired. Sign in again.',
+  413: `The text is too long: paste at most ${MAX_AGENDA_TEXT.toLocaleString('en')} characters.`,
+  422: 'No agenda found in this text. Check what you pasted, or type the agenda by hand.',
+  429: 'The AI service is busy right now. Try again in a minute.',
+  502: 'The AI service is not available right now. Try again later, or type the agenda by hand.',
+  503: 'The AI service is not available right now. Try again later, or type the agenda by hand.',
+}
+
+/**
+ * Sends pasted text to the agenda parser. It only suggests: the result pre-fills the agenda
+ * form, and Save goes through the main API. `signal` cancels the request (the Cancel button).
+ */
+export async function parseAgenda(text: string, signal: AbortSignal): Promise<ParseResult> {
+  const token = await getIdToken()
+  let response: Response
+  try {
+    response = await fetch(`${PARSER_URL}/parse`, {
+      method: 'POST',
+      signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token && { Authorization: `Bearer ${token}` }),
+      },
+      body: JSON.stringify({
+        text,
+        // The user's "Monday" is in the user's time zone, not the function's (UTC).
+        today: format(new Date(), 'yyyy-MM-dd'),
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }),
+    })
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ApiError(0, 'Network error: check your connection and try again.')
+  }
+  if (response.status === 401) await signOut().catch(() => undefined)
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      PARSE_ERRORS[response.status] ?? `The agenda could not be read (${response.status}).`,
+    )
+  }
+  return response.json() as Promise<ParseResult>
 }

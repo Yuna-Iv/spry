@@ -12,6 +12,7 @@ BACKEND_STACK="$PROJECT_NAME-backend"
 FRONTEND_STACK="$PROJECT_NAME-frontend"
 AUTH_STACK="$PROJECT_NAME-auth"
 REPORTS_STACK="$PROJECT_NAME-reports"
+AI_STACK="$PROJECT_NAME-ai"
 # CloudFront only accepts certificates from us-east-1.
 CERT_STACK="$PROJECT_NAME-certificate"
 CERT_REGION="us-east-1"
@@ -61,6 +62,23 @@ update_backend_cors() {
   aws cloudformation deploy \
     --stack-name "$BACKEND_STACK" \
     --template-file infra/backend.yaml \
+    --capabilities CAPABILITY_IAM \
+    --parameter-overrides "CorsOrigins=$origins" \
+    --tags "${STACK_TAGS[@]}" \
+    --no-fail-on-empty-changeset
+  update_ai_cors "$origins"
+}
+
+# update_ai_cors [ORIGINS]: the same origins for the agenda parser's function URL (infra/ai.yml),
+# if that stack exists. Called by update_backend_cors, so every script that changes the
+# frontend's addresses (deploy-frontend, add-domain, remove-domain) keeps both in step.
+update_ai_cors() {
+  stack_exists "$AI_STACK" || return 0
+  local origins="${1:-$(cors_origins)}"
+  echo "    Parser CORS origins: $origins"
+  aws cloudformation deploy \
+    --stack-name "$AI_STACK" \
+    --template-file infra/ai.yml \
     --capabilities CAPABILITY_IAM \
     --parameter-overrides "CorsOrigins=$origins" \
     --tags "${STACK_TAGS[@]}" \

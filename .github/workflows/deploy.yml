@@ -23,6 +23,12 @@ env:
   API_DOMAIN_NAME: ${{ vars.API_DOMAIN_NAME }}
   HOSTED_ZONE_ID: ${{ vars.HOSTED_ZONE_ID }}
   REPORT_EMAIL: ${{ vars.REPORT_EMAIL }}
+  # Agenda parser (make deploy-ai). Unset ones keep the deployed stack's current values.
+  PARSER_MODEL: ${{ vars.PARSER_MODEL }}
+  BEDROCK_REGION: ${{ vars.BEDROCK_REGION }}
+  BEDROCK_API: ${{ vars.BEDROCK_API }}
+  PARSER_EFFORT: ${{ vars.PARSER_EFFORT }}
+  BUDGET_EMAIL: ${{ vars.BUDGET_EMAIL }}
 
 jobs:
   lint:

@@ -8,7 +8,7 @@ s ?=
 .DEFAULT_GOAL := help
 .PHONY: help env build up down restart logs ps migrate migration seed psql test lint format \
 	report-local deploy-reports destroy-reports report-now report-ls report-logs \
-	llm-hello parse dev-parser \
+	llm-hello parse dev-parser deploy-ai destroy-ai parser-logs \
 	dev-backend dev-frontend install clean deploy deploy-auth deploy-backend deploy-frontend destroy-auth destroy-backend destroy-frontend add-domain remove-domain add-api-domain destroy-api infra-lint
 
 help: ## Show this help
@@ -86,9 +86,10 @@ AWS_ENV := AWS_ACCESS_KEY_ID="$(AWS_ACCESS_KEY_ID)" AWS_SECRET_ACCESS_KEY="$(AWS
 	LAMBDA_MEMORY="$(LAMBDA_MEMORY)" DOMAIN_NAME="$(DOMAIN_NAME)" API_DOMAIN_NAME="$(API_DOMAIN_NAME)" HOSTED_ZONE_ID="$(HOSTED_ZONE_ID)" \
 	GOOGLE_CLIENT_ID="$(GOOGLE_CLIENT_ID)" GOOGLE_CLIENT_SECRET="$(GOOGLE_CLIENT_SECRET)" \
 	REPORT_EMAIL="$(REPORT_EMAIL)" REPORT_SCHEDULE="$(REPORT_SCHEDULE)" REPORT_FAIL_WEEK="$(REPORT_FAIL_WEEK)" \
-	PARSER_MODEL="$(PARSER_MODEL)" BEDROCK_REGION="$(BEDROCK_REGION)" BUDGET_EMAIL="$(BUDGET_EMAIL)"
+	PARSER_MODEL="$(PARSER_MODEL)" BEDROCK_REGION="$(BEDROCK_REGION)" BUDGET_EMAIL="$(BUDGET_EMAIL)" \
+	BEDROCK_API="$(BEDROCK_API)" PARSER_EFFORT="$(PARSER_EFFORT)" PARSER_FAKE="$(PARSER_FAKE)"
 
-deploy: deploy-backend deploy-frontend deploy-reports ## Deploy the whole app to AWS (after make deploy-auth)
+deploy: deploy-backend deploy-ai deploy-frontend deploy-reports ## Deploy the whole app to AWS (after make deploy-auth)
 
 deploy-auth: env ## Deploy Cognito (user pool + app client), print its settings and write them to .env
 	@$(AWS_ENV) ./infra/deploy-auth.sh
@@ -114,14 +115,14 @@ destroy-api: env ## Delete the API domain (its CloudFront distribution and certi
 destroy-auth: env ## Delete the Cognito stack (the user pool and its accounts are kept)
 	@$(AWS_ENV) ./infra/destroy-auth.sh
 
-destroy-backend: env destroy-reports ## Delete the AWS backend stacks (keeps a final DB snapshot)
+destroy-backend: env destroy-reports destroy-ai ## Delete the AWS backend stacks (keeps a final DB snapshot)
 	@$(AWS_ENV) ./infra/destroy-backend.sh
 
 destroy-frontend: env ## Delete the S3 bucket, CloudFront distribution and domain certificate
 	@$(AWS_ENV) ./infra/destroy-frontend.sh
 
 infra-lint: ## Lint the CloudFormation templates
-	uvx cfn-lint infra/*.yaml
+	uvx cfn-lint infra/*.yaml infra/ai.yml
 
 # ---------------------------------------------------------------- Weekly report (infra/reports.yaml)
 deploy-reports: env ## Deploy the weekly report: schedule, queue, builder, bucket, mailer (after deploy-backend)
@@ -153,3 +154,12 @@ dev-parser: env ## Run the parser on :8001 (Vite proxies /parse to it); PARSER_F
 	@$(AWS_ENV) COGNITO_USER_POOL_ID="$(COGNITO_USER_POOL_ID)" COGNITO_CLIENT_ID="$(COGNITO_CLIENT_ID)" \
 		PARSER_FAKE="$(or $(PARSER_FAKE),false)" \
 		bash -c 'source infra/common.sh && cd backend && uv run uvicorn app.ai.agenda_lambda:app --reload --port 8001'
+
+deploy-ai: env ## Deploy the agenda parser (function URL) and the $5 budget (after deploy-backend)
+	@$(AWS_ENV) ./infra/deploy-ai.sh
+
+destroy-ai: env ## Delete the agenda parser stack
+	@$(AWS_ENV) ./infra/destroy-ai.sh
+
+parser-logs: env ## The parser's log lines of the last 24 h (model, tokens, latency, cost)
+	@$(AWS_ENV) ./infra/parser-logs.sh
