@@ -17,6 +17,13 @@ class Settings(BaseSettings):
     # The pool's jwks.json. Set on AWS, where the function has no internet access; locally the
     # keys are downloaded on first use.
     cognito_jwks: str = ""
+    # Agenda parser (app/ai): the Claude model on Amazon Bedrock and the region that serves it.
+    # Bedrock may be in another region than the app: the parser reaches it over the internet.
+    parser_model: str = "anthropic.claude-opus-5-5"
+    bedrock_region: str = "us-east-1"
+    # Returns a fixed agenda after a short wait instead of calling the model: for building the
+    # screen before Bedrock access is approved. Never set it on a deployment you record.
+    parser_fake: bool = False
     cors_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:5173",
         "http://localhost:3000",

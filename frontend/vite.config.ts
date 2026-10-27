@@ -18,6 +18,8 @@ export default defineConfig({
   server: {
     proxy: {
       '/api': process.env.VITE_API_PROXY ?? 'http://localhost:8000',
+      // The agenda parser (make dev-parser). On AWS the app calls its function URL instead.
+      '/parse': process.env.VITE_PARSER_PROXY ?? 'http://localhost:8001',
     },
   },
 })

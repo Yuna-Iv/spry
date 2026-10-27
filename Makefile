@@ -8,6 +8,7 @@ s ?=
 .DEFAULT_GOAL := help
 .PHONY: help env build up down restart logs ps migrate migration seed psql test lint format \
 	report-local deploy-reports destroy-reports report-now report-ls report-logs \
+	llm-hello parse dev-parser \
 	dev-backend dev-frontend install clean deploy deploy-auth deploy-backend deploy-frontend destroy-auth destroy-backend destroy-frontend add-domain remove-domain add-api-domain destroy-api infra-lint
 
 help: ## Show this help
@@ -84,7 +85,8 @@ AWS_ENV := AWS_ACCESS_KEY_ID="$(AWS_ACCESS_KEY_ID)" AWS_SECRET_ACCESS_KEY="$(AWS
 	PROJECT_NAME="$(or $(PROJECT_NAME),$(APP_NAME))" CORS_ORIGINS_AWS="$(CORS_ORIGINS_AWS)" \
 	LAMBDA_MEMORY="$(LAMBDA_MEMORY)" DOMAIN_NAME="$(DOMAIN_NAME)" API_DOMAIN_NAME="$(API_DOMAIN_NAME)" HOSTED_ZONE_ID="$(HOSTED_ZONE_ID)" \
 	GOOGLE_CLIENT_ID="$(GOOGLE_CLIENT_ID)" GOOGLE_CLIENT_SECRET="$(GOOGLE_CLIENT_SECRET)" \
-	REPORT_EMAIL="$(REPORT_EMAIL)" REPORT_SCHEDULE="$(REPORT_SCHEDULE)" REPORT_FAIL_WEEK="$(REPORT_FAIL_WEEK)"
+	REPORT_EMAIL="$(REPORT_EMAIL)" REPORT_SCHEDULE="$(REPORT_SCHEDULE)" REPORT_FAIL_WEEK="$(REPORT_FAIL_WEEK)" \
+	PARSER_MODEL="$(PARSER_MODEL)" BEDROCK_REGION="$(BEDROCK_REGION)" BUDGET_EMAIL="$(BUDGET_EMAIL)"
 
 deploy: deploy-backend deploy-frontend deploy-reports ## Deploy the whole app to AWS (after make deploy-auth)
 
@@ -136,3 +138,18 @@ report-ls: env ## List the reports in S3
 
 report-logs: env ## Show which event started the builder and the mailer (last 24 h)
 	@$(AWS_ENV) ./infra/report-logs.sh
+
+# ---------------------------------------------------------------- Agenda parser (app/ai, infra/ai.yml)
+# These run on your laptop with the AWS credentials from .env; Bedrock is called in BEDROCK_REGION.
+# infra/common.sh drops an empty AWS_SESSION_TOKEN, which would otherwise break the credentials.
+llm-hello: env ## First call to Claude on Bedrock: prints the answer, stop_reason and usage
+	@$(AWS_ENV) bash -c 'source infra/common.sh && cd backend && uv run python -m app.ai.hello'
+
+parse: env ## Parse an agenda from the laptop: make parse TEXT="..." [TODAY=2026-10-27] [PARSER_MODEL=...]
+	@test -n "$(TEXT)" || (echo 'Usage: make parse TEXT="..."' && exit 1)
+	@$(AWS_ENV) TEXT="$$TEXT" TODAY="$(TODAY)" bash -c 'source infra/common.sh && cd backend && uv run python -m app.ai.agenda'
+
+dev-parser: env ## Run the parser on :8001 (Vite proxies /parse to it); PARSER_FAKE=true needs no Bedrock
+	@$(AWS_ENV) COGNITO_USER_POOL_ID="$(COGNITO_USER_POOL_ID)" COGNITO_CLIENT_ID="$(COGNITO_CLIENT_ID)" \
+		PARSER_FAKE="$(or $(PARSER_FAKE),false)" \
+		bash -c 'source infra/common.sh && cd backend && uv run uvicorn app.ai.agenda_lambda:app --reload --port 8001'
