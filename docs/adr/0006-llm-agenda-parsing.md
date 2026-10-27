@@ -12,7 +12,7 @@ the user checks it and saves.
 
 Constraints:
 
-- **No NAT, $0 when idle.** The API and Aurora run in private subnets with no NAT gateway
+- **No NAT.** The API and its RDS PostgreSQL database run in private subnets with no NAT gateway
   (Lab 4). Anything that needs the internet either runs outside the VPC or pays for a NAT
   gateway or interface endpoints (~$7.30 a month each).
 - **Every call costs money.** An open LLM endpoint is a wallet without a lock: calls must be
@@ -24,7 +24,7 @@ Constraints:
 - **Model access depends on the account.** On this AWS account Claude Opus 5.5 and Sonnet 5
   return `AccessDeniedException: ... is not available for this account` (403); Haiku 5.5 and
   Sonnet 5.5 do not exist under the documented ids on bedrock-mantle (404). Claude Haiku 4.5
-  through bedrock-runtime works.
+  through bedrock-runtime works. The account is on the AWS Free plan, the likely cause.
 
 ## Decision
 
@@ -64,8 +64,7 @@ Constraints:
 ## Alternatives considered
 
 - **Call Bedrock from the API through a VPC interface endpoint.** One function instead of two,
-  but an interface endpoint costs ~$7.30 a month per Availability Zone even with no traffic, which breaks "$0
-  when idle", and puts an internet-facing concern into the function that holds database
+  but an interface endpoint costs ~$7.30 a month per Availability Zone even with no traffic: a fixed monthly cost for a feature used a few times a day, and puts an internet-facing concern into the function that holds database
   credentials. The parser does not need the database, so it does not need the VPC.
 - **The Claude API directly (api.anthropic.com) instead of Bedrock.** Simplest SDK, newest
   models first, but needs an API key stored as a secret, a second bill outside AWS Budgets,

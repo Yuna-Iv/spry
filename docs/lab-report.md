@@ -6,7 +6,7 @@ Spry · student: Yuliana Ivanchenko · 2026-10-27
 
 | # | Item | Where |
 |---|---|---|
-| 1 | Commit with the parser function, `infra/ai.yml`, the Paste an agenda screen and the ADR | **https://github.com/Yuna-Iv/spry/commit/2bf13541398cfa03d277f434fcf3851c69afc59f** |
+| 1 | Commits with the parser function, `infra/ai.yml`, the Paste an agenda screen and the ADR (all changes of this lab, after Lab 5) | **[https://github.com/Yuna-Iv/spry/compare/2ff092f...ef46596](https://github.com/Yuna-Iv/spry/compare/2ff092f...ef46596)** |
 | 2 | Screen recording (≤ 45 s): paste → pre-filled form → correct one field → save | **agenda_parse_vid** (attached) |
 | 3 | Test table: five inputs, the JSON each produced, what was right or wrong | [below](#3-test-table) · full JSON in [agenda-parser-tests.md](agenda-parser-tests.md) |
 | 4 | One CloudWatch log line of a parse | [below](#4-cloudwatch-log-line) |
@@ -37,7 +37,8 @@ Spry · student: Yuliana Ivanchenko · 2026-10-27
 
 **Model.** The lab specifies Claude Opus 5.5. On this account it returns
 `AccessDeniedException: … is not available for this account` (403), as does Sonnet 5; Haiku 5.5
-and Sonnet 5.5 are not found on bedrock-mantle. The parser therefore runs **Claude Haiku 4.5**
+and Sonnet 5.5 are not found on bedrock-mantle. The account is on the AWS Free plan (the database
+is a free-tier RDS PostgreSQL instance for the same reason), which is the likely cause. The parser therefore runs **Claude Haiku 4.5**
 (`us.anthropic.claude-haiku-4-5-20251001-v1:0`) through **bedrock-runtime** with the same
 Anthropic Messages API. Model, endpoint, region and effort are configuration
 (`PARSER_MODEL`, `BEDROCK_API`, `BEDROCK_REGION`, `PARSER_EFFORT`), so moving to Opus 5.5 is a
@@ -153,7 +154,7 @@ Saturday saved it as it was, so field accuracy is an upper bound. A small hand-c
 ![Spry containers (C4 level 2) with Paste an agenda](images/c4-containers.png)
 
 Two paths: **① parse** — browser → agenda parser (Lambda, outside the VPC) → Claude on Bedrock
-in us-east-1; **② save** — browser → API (Lambda, in the VPC) → Aurora. The model never writes.
+in us-east-1; **② save** — browser → API (Lambda, in the VPC) → RDS PostgreSQL. The model never writes.
 Editable source: [images/c4-containers.drawio](images/c4-containers.drawio).
 
 Decision record: [ADR 0006 — Parse pasted agendas with Claude on Amazon Bedrock](adr/0006-llm-agenda-parsing.md).
