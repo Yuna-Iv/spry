@@ -7,9 +7,9 @@ s ?=
 
 .DEFAULT_GOAL := help
 .PHONY: help env build up down restart logs ps migrate migration seed psql test lint format \
-	report-local deploy-reports destroy-reports report-now report-ls report-logs \
-	llm-hello parse dev-parser deploy-ai destroy-ai parser-logs \
-	dev-backend dev-frontend install clean deploy deploy-auth deploy-backend deploy-frontend destroy-auth destroy-backend destroy-frontend add-domain remove-domain add-api-domain destroy-api infra-lint
+	report-local report-now report-ls report-logs \
+	llm-hello parse dev-parser parser-logs infra-init infra-fmt infra-plan infra-output infra-env \
+	dev-backend dev-frontend install clean deploy deploy-backend deploy-frontend destroy-backend destroy-frontend add-domain remove-domain add-api-domain destroy-api infra-lint
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(firstword $(MAKEFILE_LIST)) | \
@@ -84,15 +84,11 @@ AWS_ENV := AWS_ACCESS_KEY_ID="$(AWS_ACCESS_KEY_ID)" AWS_SECRET_ACCESS_KEY="$(AWS
 	AWS_SESSION_TOKEN="$(AWS_SESSION_TOKEN)" AWS_REGION="$(AWS_REGION)" \
 	PROJECT_NAME="$(or $(PROJECT_NAME),$(APP_NAME))" CORS_ORIGINS_AWS="$(CORS_ORIGINS_AWS)" \
 	LAMBDA_MEMORY="$(LAMBDA_MEMORY)" DOMAIN_NAME="$(DOMAIN_NAME)" API_DOMAIN_NAME="$(API_DOMAIN_NAME)" HOSTED_ZONE_ID="$(HOSTED_ZONE_ID)" \
-	GOOGLE_CLIENT_ID="$(GOOGLE_CLIENT_ID)" GOOGLE_CLIENT_SECRET="$(GOOGLE_CLIENT_SECRET)" \
-	REPORT_EMAIL="$(REPORT_EMAIL)" REPORT_SCHEDULE="$(REPORT_SCHEDULE)" REPORT_FAIL_WEEK="$(REPORT_FAIL_WEEK)" \
-	PARSER_MODEL="$(PARSER_MODEL)" BEDROCK_REGION="$(BEDROCK_REGION)" BUDGET_EMAIL="$(BUDGET_EMAIL)" \
+	WEEK="$(WEEK)" \
+	PARSER_MODEL="$(PARSER_MODEL)" BEDROCK_REGION="$(BEDROCK_REGION)" \
 	BEDROCK_API="$(BEDROCK_API)" PARSER_EFFORT="$(PARSER_EFFORT)" PARSER_FAKE="$(PARSER_FAKE)"
 
-deploy: deploy-backend deploy-ai deploy-frontend deploy-reports ## Deploy the whole app to AWS (after make deploy-auth)
-
-deploy-auth: env ## Deploy Cognito (user pool + app client), print its settings and write them to .env
-	@$(AWS_ENV) ./infra/deploy-auth.sh
+deploy: deploy-backend deploy-frontend ## Deploy the app to AWS (the Terraform part is applied by HCP Terraform)
 
 deploy-backend: env ## Deploy backend (Lambda) + database (Aurora Serverless) to AWS, see infra/
 	@$(AWS_ENV) ./infra/deploy-backend.sh
@@ -112,35 +108,28 @@ add-api-domain: env ## Put the backend on API_DOMAIN_NAME from .env (CloudFront 
 destroy-api: env ## Delete the API domain (its CloudFront distribution and certificate)
 	@$(AWS_ENV) ./infra/destroy-api.sh
 
-destroy-auth: env ## Delete the Cognito stack (the user pool and its accounts are kept)
-	@$(AWS_ENV) ./infra/destroy-auth.sh
-
-destroy-backend: env destroy-reports destroy-ai ## Delete the AWS backend stacks (keeps a final DB snapshot)
+destroy-backend: env ## Delete the AWS backend stacks (keeps a final DB snapshot)
 	@$(AWS_ENV) ./infra/destroy-backend.sh
 
 destroy-frontend: env ## Delete the S3 bucket, CloudFront distribution and domain certificate
 	@$(AWS_ENV) ./infra/destroy-frontend.sh
 
-infra-lint: ## Lint the CloudFormation templates
-	uvx cfn-lint infra/*.yaml infra/ai.yml
+infra-lint: ## Lint the CloudFormation templates and the Terraform files
+	uvx cfn-lint infra/*.yaml
+	terraform -chdir=infra fmt -check -recursive
+	terraform -chdir=infra validate
 
-# ---------------------------------------------------------------- Weekly report (infra/reports.yaml)
-deploy-reports: env ## Deploy the weekly report: schedule, queue, builder, bucket, mailer (after deploy-backend)
-	@$(AWS_ENV) ./infra/deploy-reports.sh
-
-destroy-reports: env ## Delete the weekly report stack and its reports
-	@$(AWS_ENV) ./infra/destroy-reports.sh
-
+# ---------------------------------------------------------------- Weekly report (infra/reports.tf)
 report-now: env ## Build and email a report now: make report-now WEEK=2026-W40 (default: last week)
-	@$(AWS_ENV) WEEK="$(WEEK)" ./infra/report-now.sh
+	@$(AWS_ENV) ./infra/report-now.sh
 
 report-ls: env ## List the reports in S3
-	@$(AWS_ENV) bash -c 'source infra/common.sh && aws s3 ls "s3://$$(output "$$REPORTS_STACK" BucketName)/reports/" --recursive'
+	@$(AWS_ENV) bash -c 'source infra/common.sh && aws s3 ls "s3://$$(tf_output reports_bucket)/reports/" --recursive'
 
 report-logs: env ## Show which event started the builder and the mailer (last 24 h)
 	@$(AWS_ENV) ./infra/report-logs.sh
 
-# ---------------------------------------------------------------- Agenda parser (app/ai, infra/ai.yml)
+# ---------------------------------------------------------------- Agenda parser (app/ai, infra/ai.tf)
 # These run on your laptop with the AWS credentials from .env; Bedrock is called in BEDROCK_REGION.
 # infra/common.sh drops an empty AWS_SESSION_TOKEN, which would otherwise break the credentials.
 llm-hello: env ## First call to Claude on Bedrock: prints the answer, stop_reason and usage
@@ -155,11 +144,26 @@ dev-parser: env ## Run the parser on :8001 (Vite proxies /parse to it); PARSER_F
 		PARSER_FAKE="$(or $(PARSER_FAKE),false)" \
 		bash -c 'source infra/common.sh && cd backend && uv run uvicorn app.ai.agenda_lambda:app --reload --port 8001'
 
-deploy-ai: env ## Deploy the agenda parser (function URL) and the $5 budget (after deploy-backend)
-	@$(AWS_ENV) ./infra/deploy-ai.sh
 
-destroy-ai: env ## Delete the agenda parser stack
-	@$(AWS_ENV) ./infra/destroy-ai.sh
 
 parser-logs: env ## The parser's log lines of the last 24 h (model, tokens, latency, cost)
 	@$(AWS_ENV) ./infra/parser-logs.sh
+
+# ---------------------------------------------------------------- Terraform (infra/*.tf)
+# Cognito, the weekly report and the agenda parser are Terraform, with the state in HCP Terraform
+# (workspace spry-dev). There is no apply here on purpose: HCP Terraform applies after a merge to
+# main. A plan from the laptop runs in HCP Terraform too (speculative, it changes nothing).
+infra-init: ## Connect infra/ to HCP Terraform (after terraform login)
+	terraform -chdir=infra init -input=false
+
+infra-fmt: ## Format the Terraform files
+	terraform -chdir=infra fmt -recursive
+
+infra-plan: ## Plan the Terraform part in HCP Terraform (changes nothing)
+	terraform -chdir=infra plan
+
+infra-output: ## Show the Terraform outputs (Cognito ids, parser URL, report queue, ...)
+	terraform -chdir=infra output
+
+infra-env: env ## Write the Cognito settings from the Terraform outputs to .env (for local runs)
+	@./infra/write-env.sh

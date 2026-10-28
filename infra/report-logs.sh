@@ -8,8 +8,8 @@ main() {
   source infra/common.sh
 
   since=$(( ($(date +%s) - 86400) * 1000 ))
-  for group in BuilderLogGroup MailerLogGroup; do
-    name="$(output "$REPORTS_STACK" "$group")"
+  for group in report_builder_log_group report_mailer_log_group; do
+    name="$(tf_output "$group")"
     echo "==> $name"
     aws logs filter-log-events --log-group-name "$name" --start-time "$since" \
       --filter-pattern '"triggered"' \

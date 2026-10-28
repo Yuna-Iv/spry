@@ -1,5 +1,9 @@
 # Тижневий звіт про зустрічі (Lab 5)
 
+> З Lab 7 інфраструктура звіту описана в Terraform ([`infra/reports.tf`](../infra/reports.tf)) і
+> розгортається HCP Terraform; `make deploy-reports` і `make destroy-reports` більше немає.
+> Команди `make report-now`, `make report-ls` і `make report-logs` працюють як раніше.
+
 Щопонеділка о 07:00 (Europe/Kyiv) система будує CSV-звіт за минулий ISO-тиждень, кладе його
 в S3 і надсилає на пошту через SES. Ніхто нічого не натискає.
 

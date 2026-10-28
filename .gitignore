@@ -7,3 +7,12 @@ node_modules/
 dist/
 .idea/
 .DS_Store
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+infra/.build/
+generated.tf

@@ -9,7 +9,7 @@ main() {
   cd "$(dirname "$0")/.."
   source infra/common.sh
 
-  require_auth_stack
+  require_terraform
   LAMBDA_MEMORY="${LAMBDA_MEMORY:-512}"
   PASSWORD_PARAM="/$PROJECT_NAME/db-password"
 
@@ -22,7 +22,7 @@ main() {
   account="$(aws sts get-caller-identity --query Account --output text)"
   echo "==> Deploying '$PROJECT_NAME' backend $TAG to account $account in $AWS_REGION"
 
-  echo "==> [1/5] Database password ($PASSWORD_PARAM)"
+  echo "==> [1/6] Database password ($PASSWORD_PARAM)"
   if aws ssm get-parameter --name "$PASSWORD_PARAM" >/dev/null 2>&1; then
     echo "    exists, keeping it"
   else
@@ -37,7 +37,7 @@ main() {
   db_password="$(aws ssm get-parameter --name "$PASSWORD_PARAM" --with-decryption \
     --query Parameter.Value --output text)"
 
-  echo "==> [2/5] Container registry ($ECR_STACK)"
+  echo "==> [2/6] Container registry ($ECR_STACK)"
   aws cloudformation deploy \
     --stack-name "$ECR_STACK" \
     --template-file infra/ecr.yaml \
@@ -47,7 +47,7 @@ main() {
   repository="$(output "$ECR_STACK" RepositoryUri)"
   image="$repository:$TAG"
 
-  echo "==> [3/5] Build and push $image"
+  echo "==> [3/6] Build and push $image"
   if aws ecr describe-images --repository-name "$PROJECT_NAME-backend" --image-ids "imageTag=$TAG" >/dev/null 2>&1; then
     echo "    already in ECR, skipping"
   else
@@ -57,11 +57,11 @@ main() {
     docker push "$image"
   fi
 
-  echo "==> [4/5] Lambda + database ($BACKEND_STACK)"
-  pool_id="$(output "$AUTH_STACK" UserPoolId)"
-  client_id="$(output "$AUTH_STACK" UserPoolClientId)"
+  echo "==> [4/6] Lambda + database ($BACKEND_STACK)"
+  pool_id="$(tf_output cognito_user_pool_id)"
+  client_id="$(tf_output cognito_client_id)"
   # The function has no internet access, so it gets the token signing keys up front.
-  jwks="$(curl -fsS "$(output "$AUTH_STACK" Issuer)/.well-known/jwks.json" \
+  jwks="$(curl -fsS "$(tf_output cognito_issuer)/.well-known/jwks.json" \
     | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin), separators=(",", ":")))')"
   echo "    Cognito: $pool_id (client $client_id)"
   # Includes the frontend's addresses once it is deployed, so a redeploy keeps them.
@@ -85,8 +85,18 @@ main() {
     --no-fail-on-empty-changeset
   api_url="$(output "$BACKEND_STACK" ApiUrl)"
 
+  # The report builder and the agenda parser run the same image with another app. Terraform
+  # creates them and ignores image_uri; moving them to a new image is the app pipeline's job.
+  echo "==> [5/6] Move the report builder and the agenda parser to $image"
+  for fn in "$PROJECT_NAME-report-builder" "$PROJECT_NAME-agenda-parser"; do
+    if aws lambda get-function --function-name "$fn" >/dev/null 2>&1; then
+      aws lambda update-function-code --function-name "$fn" --image-uri "$image" \
+        --query LastUpdateStatus --output text | sed "s|^|    $fn: |"
+    fi
+  done
+
   # The first request after a deploy is a cold start: migrations check + app startup.
-  echo "==> [5/5] Wait for $api_url/health"
+  echo "==> [6/6] Wait for $api_url/health"
   for _ in $(seq 24); do
     if curl -fsS --max-time 30 "$api_url/health" >/dev/null 2>&1; then
       echo

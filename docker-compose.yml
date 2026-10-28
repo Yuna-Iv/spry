@@ -33,7 +33,7 @@ services:
   frontend:
     build:
       context: ./frontend
-      # Public Cognito ids, baked into the bundle at build time (make deploy-auth writes them).
+      # Public Cognito ids, baked into the bundle at build time (make infra-env writes them).
       args:
         COGNITO_USER_POOL_ID: ${COGNITO_USER_POOL_ID:-}
         COGNITO_CLIENT_ID: ${COGNITO_CLIENT_ID:-}

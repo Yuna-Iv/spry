@@ -8,7 +8,7 @@ main() {
   source infra/common.sh
 
   week="${WEEK:-$(python3 -c 'import datetime as d; y, w, _ = (d.date.today() - d.timedelta(7)).isocalendar(); print(f"{y}-W{w:02d}")')}"
-  queue="$(output "$REPORTS_STACK" QueueUrl)"
+  queue="$(tf_output report_queue_url)"
   aws sqs send-message --queue-url "$queue" \
     --message-body "{\"week\": \"$week\", \"source\": \"make\"}" \
     --query MessageId --output text

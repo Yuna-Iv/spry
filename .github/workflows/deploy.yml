@@ -1,5 +1,6 @@
-# CI/CD: on every push to main — lint, test, then deploy to AWS with `make deploy`
+# CI/CD: on every push to main — lint, test, then deploy the app to AWS with `make deploy`
 # (the same command you run locally). AWS credentials come from OIDC, not stored keys.
+# The infrastructure in infra/*.tf is not deployed here: HCP Terraform plans and applies it.
 name: Deploy
 
 on:
@@ -22,13 +23,6 @@ env:
   DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
   API_DOMAIN_NAME: ${{ vars.API_DOMAIN_NAME }}
   HOSTED_ZONE_ID: ${{ vars.HOSTED_ZONE_ID }}
-  REPORT_EMAIL: ${{ vars.REPORT_EMAIL }}
-  # Agenda parser (make deploy-ai). Unset ones keep the deployed stack's current values.
-  PARSER_MODEL: ${{ vars.PARSER_MODEL }}
-  BEDROCK_REGION: ${{ vars.BEDROCK_REGION }}
-  BEDROCK_API: ${{ vars.BEDROCK_API }}
-  PARSER_EFFORT: ${{ vars.PARSER_EFFORT }}
-  BUDGET_EMAIL: ${{ vars.BUDGET_EMAIL }}
 
 jobs:
   lint:
@@ -89,6 +83,16 @@ jobs:
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
+
+      # make deploy reads the Terraform outputs (Cognito ids, the parser URL) from HCP Terraform.
+      # TF_API_TOKEN: an HCP Terraform team token with read access to the workspace's state.
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          cli_config_credentials_token: ${{ secrets.TF_API_TOKEN }}
+          terraform_wrapper: false
+
+      - name: Terraform outputs
+        run: terraform -chdir=infra init -input=false
 
       - name: make deploy
         run: make deploy

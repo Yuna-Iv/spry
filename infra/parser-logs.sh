@@ -8,8 +8,7 @@ main() {
   cd "$(dirname "$0")/.."
   source infra/common.sh
 
-  stack_exists "$AI_STACK" || { echo "Stack $AI_STACK not found; run make deploy-ai first." >&2; exit 1; }
-  log_group="$(output "$AI_STACK" LogGroup)"
+  log_group="$(tf_output parser_log_group)"
   since=$(( ($(date +%s) - 24 * 3600) * 1000 ))
   aws logs filter-log-events \
     --log-group-name "$log_group" \
