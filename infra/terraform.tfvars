@@ -12,3 +12,6 @@ parser_model   = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
 bedrock_api    = "runtime"
 bedrock_region = "us-east-1"
 parser_effort  = "none"
+
+# Spry's frontend on Google Cloud (Lab 9): Cognito must redirect back there after sign-in.
+extra_app_urls = ["https://spry-yuna-2026.web.app", "https://spry-yuna-2026.firebaseapp.com"]

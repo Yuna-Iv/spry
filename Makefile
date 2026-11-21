@@ -167,3 +167,30 @@ infra-output: ## Show the Terraform outputs (Cognito ids, parser URL, report que
 
 infra-env: env ## Write the Cognito settings from the Terraform outputs to .env (for local runs)
 	@./infra/write-env.sh
+
+# ---------------------------------------------------------------- Google Cloud (gcp/, Lab 9)
+.PHONY: gcp-init gcp-validate gcp-plan gcp-apply gcp-deploy gcp-db-stop gcp-db-start gcp-destroy
+
+gcp-init: ## Connect gcp/ to HCP Terraform (workspace spry-gcp) and install the google provider
+	terraform -chdir=gcp init
+
+gcp-validate: ## Check gcp/ without any credentials (no state, no Google login)
+	terraform -chdir=gcp init -backend=false -input=false && terraform -chdir=gcp validate
+
+gcp-plan: ## Plan the Google Cloud part (changes nothing)
+	terraform -chdir=gcp plan
+
+gcp-apply: ## Create or update Cloud SQL, secrets, Artifact Registry and the Cloud Run service
+	terraform -chdir=gcp apply
+
+gcp-deploy: ## Build and push the backend image, update Cloud Run, deploy the frontend to Firebase Hosting
+	gcp/deploy.sh
+
+gcp-db-stop: ## Stop the Cloud SQL instance (compute stops billing, the 10 GB disk does not)
+	terraform -chdir=gcp apply -var db_running=false
+
+gcp-db-start: ## Start the Cloud SQL instance again
+	terraform -chdir=gcp apply -var db_running=true
+
+gcp-destroy: ## Delete everything in gcp/ (the database too: no final backup)
+	terraform -chdir=gcp destroy

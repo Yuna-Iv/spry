@@ -85,6 +85,12 @@ variable "budget_email" {
   description = "AWS Budgets emails this address when the month's cost passes $5. Empty: no budget."
 }
 
+variable "extra_app_urls" {
+  type        = list(string)
+  default     = []
+  description = "Other addresses of the frontend (e.g. Firebase Hosting on Google Cloud): Cognito redirects and parser CORS."
+}
+
 variable "extra_cors_origins" {
   type        = list(string)
   default     = []
