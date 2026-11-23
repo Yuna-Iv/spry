@@ -41,8 +41,8 @@ locals {
     trimsuffix(try(data.aws_cloudformation_stack.frontend.outputs[key], ""), "/")
   ])
   # Local dev servers too: signing in with Google on localhost needs the same redirect.
-  app_urls     = concat(["http://localhost:5173", "http://localhost:3000"], local.frontend_urls)
-  cors_origins = concat(local.frontend_urls, var.extra_cors_origins)
+  app_urls     = concat(["http://localhost:5173", "http://localhost:3000"], local.frontend_urls, var.extra_app_urls)
+  cors_origins = concat(local.frontend_urls, var.extra_app_urls, var.extra_cors_origins)
 
   reports_bucket = "${var.project_name}-reports-${local.account_id}"
 }
